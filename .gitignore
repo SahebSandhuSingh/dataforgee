@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+logs/*.jsonl
+!logs/.gitkeep
+!logs/example_session.jsonl
+test_results/*
+!test_results/.gitkeep
+test_audio/*.wav
+node_modules/
+.DS_Store

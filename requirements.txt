@@ -1,0 +1,4 @@
+livekit-agents[rime,deepgram,anthropic,silero]~=1.5
+livekit~=0.20
+aiohttp>=3.9
+python-dotenv>=1.0
