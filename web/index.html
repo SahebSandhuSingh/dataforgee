@@ -3,24 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Say That Sound — Voice Coach</title>
-    <meta name="description" content="Real-time pronunciation coaching voice agent">
-    <link rel="stylesheet" href="/static/style.css">
+    <title>Say That Sound — Voice Pronunciation Coach</title>
+    <meta name="description" content="Real-time pronunciation coaching voice agent powered by Rime TTS and LiveKit">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
     <div id="app">
         <header>
-            <h1>Say That Sound</h1>
-            <p class="subtitle">Pronunciation Practice — Step 1 Voice Loop</p>
+            <div class="logo-row">
+                <div class="logo-icon">🔊</div>
+                <div>
+                    <h1>Say That Sound</h1>
+                    <p class="subtitle">Voice Pronunciation Coach</p>
+                </div>
+            </div>
         </header>
 
         <div id="status-bar">
-            <span id="connection-dot" class="dot disconnected"></span>
-            <span id="connection-text">Disconnected</span>
+            <div class="status-left">
+                <span id="connection-dot" class="dot disconnected"></span>
+                <span id="connection-text">Disconnected</span>
+            </div>
+            <div class="status-right">
+                <span id="drill-state-badge" class="badge badge-idle">IDLE</span>
+            </div>
+        </div>
+
+        <!-- Drill Info Panel -->
+        <div id="drill-info" class="panel hidden">
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Target Word</span>
+                    <span id="target-word" class="info-value">—</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Weak Phoneme</span>
+                    <span id="weak-phoneme" class="info-value">—</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Confidence</span>
+                    <span id="confidence" class="info-value">—</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Speed</span>
+                    <span id="speed-tier" class="info-value">—</span>
+                </div>
+            </div>
         </div>
 
         <div id="controls">
-            <button id="connect-btn" onclick="toggleConnection()">Connect</button>
+            <button id="connect-btn">Connect</button>
         </div>
 
         <div id="mic-section">
@@ -35,6 +70,6 @@
     </div>
 
     <!-- LiveKit Client SDK (ESM from CDN) -->
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/app.js?v=3"></script>
 </body>
 </html>

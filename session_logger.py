@@ -1,8 +1,9 @@
 """
-Structured JSONL session logger for the Say That Sound voice agent.
+Structured JSONL session logger for the Say That Sound voice agent — Step 3.
 
 Writes one JSON line per event to logs/session_<ISO-timestamp>.jsonl.
-Tracks per-turn latency breakdowns and interrupt events.
+Tracks per-turn latency breakdowns, interrupt events, drill state transitions,
+generation IDs, and Rime cancellation events.
 """
 
 import json
@@ -71,8 +72,12 @@ class SessionLogger:
         agent_response: str,
         interrupted: bool = False,
         interrupt_elapsed_ms: Optional[float] = None,
+        drill_id: Optional[str] = None,
+        interaction_generation: Optional[int] = None,
+        drill_state: Optional[str] = None,
+        command: Optional[str] = None,
     ) -> None:
-        """Write a complete turn record."""
+        """Write a complete turn record with Step 3 metadata."""
         self._turn += 1
 
         latency = {}
@@ -113,6 +118,17 @@ class SessionLogger:
             "latency": latency,
             "interrupted": interrupted,
         }
+
+        # Step 3 metadata
+        if drill_id is not None:
+            record["drill_id"] = drill_id
+        if interaction_generation is not None:
+            record["interaction_generation"] = interaction_generation
+        if drill_state is not None:
+            record["drill_state"] = drill_state
+        if command is not None:
+            record["command"] = command
+
         if interrupted and interrupt_elapsed_ms is not None:
             record["interrupt_elapsed_ms"] = round(interrupt_elapsed_ms, 1)
 
@@ -121,6 +137,152 @@ class SessionLogger:
 
         # Reset timing for next turn
         self._reset_timing()
+
+    def log_pronunciation_diagnosis(
+        self,
+        word: str,
+        expected_phonemes: list,
+        observed_phonemes: list,
+        weak_phoneme: Optional[str],
+        confidence: float,
+        status: str,
+        turn: Optional[int] = None,
+        alignment: Optional[list] = None,
+        model_name: str = "wav2vec2-large-xlsr-53-phoneme-ctc",
+        drill_id: Optional[str] = None,
+        interaction_generation: Optional[int] = None,
+    ) -> None:
+        """Write structured pronunciation diagnosis record."""
+        record = {
+            "event": "pronunciation_diagnosis",
+            "turn": turn if turn is not None else self._turn,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "word": word,
+            "expected_phonemes": expected_phonemes,
+            "observed_phonemes": observed_phonemes,
+            "weak_phoneme": weak_phoneme,
+            "confidence": round(float(confidence), 2),
+            "status": status,
+            "model_name": model_name,
+        }
+        if alignment is not None:
+            record["alignment"] = alignment
+        if drill_id is not None:
+            record["drill_id"] = drill_id
+        if interaction_generation is not None:
+            record["interaction_generation"] = interaction_generation
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
+
+    def log_pronunciation_demo(
+        self,
+        word: str,
+        phoneme: Optional[str],
+        speed_tier: str,
+        model: str = RIME_MODEL,
+        speaker: str = RIME_SPEAKER,
+        transport: str = "websocket",
+        drill_id: Optional[str] = None,
+        interaction_generation: Optional[int] = None,
+        drill_state: Optional[str] = None,
+    ) -> None:
+        """Write structured Rime drill playback demonstration record."""
+        record = {
+            "event": "pronunciation_demo",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "word": word,
+            "phoneme": phoneme,
+            "speed_tier": speed_tier,
+            "rime_model": model,
+            "speaker": speaker,
+            "transport": transport,
+        }
+        if drill_id is not None:
+            record["drill_id"] = drill_id
+        if interaction_generation is not None:
+            record["interaction_generation"] = interaction_generation
+        if drill_state is not None:
+            record["drill_state"] = drill_state
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
+
+    def log_drill_command(
+        self,
+        command: str,
+        word: str,
+        phoneme: Optional[str],
+        previous_speed: Optional[str] = None,
+        new_speed: Optional[str] = None,
+        drill_id: Optional[str] = None,
+        interaction_generation: Optional[int] = None,
+    ) -> None:
+        """Write structured drill command event ('again', 'slower', 'normal speed', 'stop')."""
+        record = {
+            "event": "drill_command",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "command": command,
+            "word": word,
+            "phoneme": phoneme,
+        }
+        if previous_speed is not None:
+            record["previous_speed"] = previous_speed
+        if new_speed is not None:
+            record["new_speed"] = new_speed
+        if drill_id is not None:
+            record["drill_id"] = drill_id
+        if interaction_generation is not None:
+            record["interaction_generation"] = interaction_generation
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
+
+    def log_interrupt(
+        self,
+        word: str,
+        phoneme: Optional[str],
+        speed_tier: str,
+        drill_state: str,
+        elapsed_ms: Optional[float] = None,
+        drill_id: Optional[str] = None,
+        interaction_generation: Optional[int] = None,
+        stale_audio_discarded: bool = False,
+        rime_cancelled: bool = False,
+    ) -> None:
+        """Write enhanced interrupt event with Step 3 fields."""
+        record = {
+            "event": "interrupt",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "word": word,
+            "phoneme": phoneme,
+            "speed_tier": speed_tier,
+            "drill_state": drill_state,
+            "stale_audio_discarded": stale_audio_discarded,
+            "rime_cancelled": rime_cancelled,
+        }
+        if elapsed_ms is not None:
+            record["elapsed_ms"] = round(elapsed_ms, 1)
+        if drill_id is not None:
+            record["drill_id"] = drill_id
+        if interaction_generation is not None:
+            record["interaction_generation"] = interaction_generation
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
+
+    def log_stale_audio_discarded(
+        self,
+        stale_generation: int,
+        current_generation: int,
+        stage: str,
+    ) -> None:
+        """Log when stale audio from an old generation is discarded."""
+        record = {
+            "event": "stale_audio_discarded",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "stale_generation": stale_generation,
+            "current_generation": current_generation,
+            "stage": stage,
+        }
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
 
     def log_event(self, event_type: str, data: dict | None = None) -> None:
         """Write a generic event (connect, disconnect, error, etc.)."""

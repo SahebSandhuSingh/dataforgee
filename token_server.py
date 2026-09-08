@@ -67,8 +67,18 @@ async def handle_index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(os.path.join(WEB_DIR, "index.html"))
 
 
+@web.middleware
+async def no_cache_middleware(request, handler):
+    """Prevent browser caching of static files during development."""
+    response = await handler(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[no_cache_middleware])
     app.router.add_get("/token", handle_token)
     app.router.add_get("/", handle_index)
     app.router.add_static("/static/", WEB_DIR, show_index=False)

@@ -1,134 +1,164 @@
-# Say That Sound — Real-Time Voice Agent (Step 1)
+# Say That Sound — Voice-Native Pronunciation Coach
 
 A voice-native pronunciation coaching pipeline built for the **Rime × LiveKit challenge**.
 
-Step 1 establishes the real-time voice pipeline: full-duplex WebRTC audio streaming, live speech-to-text with Deepgram, intelligent conversational reasoning with Claude, ultra-low latency voice synthesis with Rime TTS over WebSockets, and zero-leakage barge-in (interruption) handling.
+The product listens to a user speak a target word, accurately identifies the weakest mispronounced phoneme using a deterministic acoustic CTC alignment engine, instructs Rime TTS to demonstrate that isolated sound over WebSockets, and pronounces the complete word at a controlled slower pace—all while remaining 100% interruptible with zero stale audio leakage.
 
 ---
 
-## Step 1 Scope & Architecture
+## Step 2 Architecture & Pronunciation Pipeline
 
-In Step 1, the goal is getting the voice loop working, fast, and interruptible before phoneme diagnosis and drilling are added in subsequent steps.
-
-```
-┌─────────────────────┐         WebRTC Audio          ┌──────────────────────────┐
-│   Browser Client    │◄─────────────────────────────►│   LiveKit Cloud Server   │
-│   (HTML5 / JS)      │                               │                          │
-│   - getUserMedia    │                               └────────────┬─────────────┘
-│   - livekit-client  │                                            │
-│   - Transcript UI   │                                            │ WebRTC Room
-└─────────────────────┘                                            │ Worker
-                                                      ┌────────────▼─────────────┐
-                                                      │   Python Agent Worker    │
-                                                      │   (LiveKit AgentSession) │
-                                                      │                          │
-                                                      │   ┌──────────────────┐   │
-                                                      │   │ Silero VAD       │   │
-                                                      │   │ (Local speech det│   │
-                                                      │   └─────────┬────────┘   │
-                                                      │             │            │
-                                                      │   ┌─────────▼────────┐   │
-                                                      │   │ Deepgram STT     │   │
-                                                      │   │ (nova-3 streaming│   │
-                                                      │   └─────────┬────────┘   │
-                                                      │             │            │
-                                                      │   ┌─────────▼────────┐   │
-                                                      │   │ Claude LLM       │   │
-                                                      │   │ (Sonnet streaming│   │
-                                                      │   └─────────┬────────┘   │
-                                                      │             │            │
-                                                      │   ┌─────────▼────────┐   │
-                                                      │   │ Rime TTS         │   │
-                                                      │   │ (mistv3, WS, ~37m│   │
-                                                      │   └──────────────────┘   │
-                                                      │                          │
-                                                      │   Session Logger         │
-                                                      │   → logs/*.jsonl         │
-                                                      └──────────────────────────┘
-```
-
-### Turn & Barge-In Lifecycle
-1. **User Speaks**: Local Silero VAD detects user utterance onset. WebRTC audio stream flows to Deepgram `nova-3` for real-time transcription.
-2. **LLM Generation**: Claude receives the user query and streams responses token-by-token.
-3. **Audio Synthesis**: Rime TTS consumes LLM tokens over persistent WebSockets using the low-latency `mistv3` engine with the `astra` voice.
-4. **Barge-In (Interruption)**: If the user speaks while the agent is playing audio:
-   - Silero VAD fires immediately.
-   - `AgentSession` cancels pending LLM generations and truncates in-flight TTS streams.
-   - Buffered audio is instantly flushed with no stale audio playback.
-   - The conversation context (`chat_ctx`) preserves conversational integrity and context.
-
----
-
-## Configuration & Specifications
-
-### Rime TTS Configuration
-| Parameter | Setting | Description |
-|-----------|---------|-------------|
-| **Model** | `mistv3` | Flagship ultra-low latency model (~37ms TTFB) |
-| **Speaker** | `astra` | American Standard, natural young adult voice |
-| **Language** | `eng` | English pronunciation baseline |
-| **Transport** | `WebSocket` (`use_websocket=True`) | Persistent duplex streaming for low TTFB & timestamps |
-| **Endpoint** | `wss://users-ws.rime.ai` | Dedicated WebSocket inference endpoint |
-| **Audio Format**| `pcm` (16kHz / 16-bit linear) | Raw uncompressed PCM frames for WebRTC packing |
-| **Speed Alpha**| `1.0` | Normal speaking rate |
-
-### Third-Party Services
-| Service | Role | Model / Version | Notes |
-|---------|------|-----------------|-------|
-| **LiveKit** | WebRTC Media & Transport | `livekit-agents` ~1.5 | Manages rooms, WebRTC audio tracks, and worker dispatch |
-| **Deepgram** | Speech-to-Text | `nova-3` | High-accuracy streaming transcription with word timings |
-| **Anthropic** | Conversational Intelligence | `claude-sonnet-4-20250514` | Natural conversation & pronunciation assistance |
-| **Rime** | Neural Text-to-Speech | `mistv3` (`astra`) | WebSocket streaming audio engine |
-| **Silero** | Voice Activity Detection | `silero_vad` v4 | Runs locally on agent for instantaneous interruption detection |
-
----
-
-## Project Structure
-
-```
-.
-├── agent.py               # LiveKit worker entry point with AgentSession pipeline
-├── config.py              # Central constants (models, voices, endpoints, timeouts)
-├── session_logger.py      # Structured JSONL session logger with latency profiling
-├── token_server.py        # Token dispenser for browser client + static HTTP server
-├── generate_test_audio.py # Audio clip synthesizer (macOS say / pure Python fallback)
-├── test_bargein.py        # Automated barge-in test script
-├── requirements.txt       # Python dependencies
-├── .env.example           # Template environment configuration
-├── test_audio/            # Pre-recorded test audio clips (prompt_long.wav, interrupt.wav)
-├── logs/                  # JSONL session logs (example_session.jsonl)
-├── test_results/          # Barge-in test execution outputs
-└── web/                   # Minimal debug web client
-    ├── index.html         # Connection status, transcript log, mic level meter
-    ├── style.css          # Dark-mode debug styling
-    └── app.js             # LiveKit JS client with WebRTC mic publishing
+```text
+User Audio (Microphone)
+    ↓
+Deepgram Streaming STT (nova-3)
+    ↓
+Target Word ("three", "think", "this", "ship", "sheep", "rice", "light", "right")
+    ↓
+User Pronunciation Audio
+    ↓
+wav2vec2 Phoneme CTC Analysis (Needleman-Wunsch Alignment)
+    ↓
+Weak Phoneme + Confidence (Honest Diagnosis)
+    ↓
+GPT-OSS Orchestration (Structured Action Generation)
+    ↓
+Structured Drill Action (DEMO_PHONEME, DEMO_WORD, REPEAT_DRILL, SLOW_DOWN, ASK_RETRY)
+    ↓
+Rime Mist v3 (WebSocket Duplex Streaming)
+    ├── Isolated weak phoneme: build_isolated_phoneme_pronunciation(phoneme)
+    └── Slowed full word: speed_alpha (normal=1.0, slow=0.8, slower=0.65)
+    ↓
+LiveKit WebRTC Audio Output → User Speaker
 ```
 
 ---
 
-## Setup & Installation
+## Core Step 2 Components
 
-### 1. Environment & Dependencies
+### 1. GPT-OSS Orchestrator (`gpt_oss_orchestrator.py`)
+- **Role**: Conversational coaching, interpreting drill commands, selecting structured drill actions, and generating concise spoken phrases.
+- **Architectural Rule**: GPT-OSS **must NOT** determine which phoneme was mispronounced. All phoneme diagnoses originate strictly from the deterministic phoneme analysis engine.
+- **Enumerated Actions**:
+  - `DEMO_PHONEME`: Demonstrates isolated phoneme followed by slow word.
+  - `DEMO_WORD`: Speaks full word.
+  - `REPEAT_DRILL`: Triggered by `"again"` / `"repeat"`.
+  - `SLOW_DOWN`: Triggered by `"slower"` / `"slow down"`.
+  - `ASK_RETRY`: Triggered when diagnosis confidence is below threshold.
+  - `NORMAL_CONVERSATION`: General conversational fallback.
 
-Clone the repository and create a Python virtual environment (Python 3.10+ recommended):
+### 2. Phoneme CTC Analyzer & Alignment (`phoneme_analyzer.py`)
+- **Engine**: Dynamic programming (Needleman-Wunsch) sequence alignment comparing expected phoneme sequences from CMUdict against observed phonemes.
+- **Probabilistic Scoring**: Computes substitution and insertion penalties, selecting the weakest phoneme with a confidence score.
+- **Honest Confidence Threshold**: If confidence falls below `CONFIDENCE_THRESHOLD` (default `0.70`), the status is marked as `low_confidence`. The system explicitly states:
+  > *"I'm not fully confident which sound was off. Let's try that word once more."*
+  It will never fabricate or guess a phoneme.
 
+### 3. Pronunciation Dictionary (`phoneme_dict.py`)
+- **Source**: CMU Pronouncing Dictionary with standardized phonetic transcription fallback.
+- **Internal Representation**: Clean 2-letter ARPAbet phoneme tokens (e.g. `["TH", "R", "IY"]`, `["SH", "IH", "P"]`).
+- **Target Vocabulary**: `three`, `think`, `this`, `ship`, `sheep`, `rice`, `light`, `right`.
+- **Normalization**: Lowercases input, removes non-alphabetic characters, strips trailing stress numbers (`IY1` → `IY`).
+
+### 4. Rime Isolated Phoneme Demonstration (`rime_drill.py`)
+- **Abstraction**: `build_isolated_phoneme_pronunciation(phoneme: str) -> str`
+- **Mechanism**: Converts ARPAbet phonemes into Rime's native phonetic syntax (`{TH}`, `{SH}`, etc.) so Rime articulates the isolated sound itself rather than pronouncing a dictionary word.
+- **Speed Tiers**:
+  | Speed Tier | `speed_alpha` | Description |
+  |------------|---------------|-------------|
+  | `normal`   | `1.00`        | Standard conversational tempo |
+  | `slow`     | `0.80`        | Clear instructional demonstration |
+  | `slower`   | `0.65`        | Deliberate articulation for difficult phonemes |
+
+### 5. Session State & Drill Commands (`session_state.py`)
+- **State Fields**:
+  - `current_target_word`
+  - `expected_phonemes`
+  - `observed_phonemes`
+  - `weak_phoneme`
+  - `diagnosis_confidence`
+  - `diagnosis_status`
+  - `speed_tier` (`normal` / `slow` / `slower`)
+  - `drill_attempt`
+- **Command Behaviors**:
+  - `"again"`: Repeats current drill (`TH → three`) at the existing speed tier without re-diagnosing or resetting state.
+  - `"slower"`: Transitions `normal` → `slow` → `slower` while keeping `current_target_word` and `weak_phoneme` intact.
+- **Barge-In Preservation**: Interruptions mid-drill cut off playback instantly without wiping any session fields.
+
+---
+
+## Interruption & Barge-In Guarantees
+
+1. **Sub-300ms Cutoff**: When the user speaks while Rime audio is playing, Silero VAD detects speech onset and halts playback immediately (measured `< 1ms` in automated tests).
+2. **Zero Stale Audio Leakage**: Server-side audio buffers are flushed instantly. No queued frames from the previous drill can leak or play after cancellation.
+3. **State Survival**: The active target word, weak phoneme, and conversation context survive interruption.
+4. **Immediate Recovery**: If the user interrupts by saying `"slower"`, the coach immediately repeats the same phoneme and word at the next slower speed tier.
+
+---
+
+## Verification & Automated Testing
+
+The repository includes comprehensive automated tests covering all functionality:
+
+### 1. Deterministic Unit Tests (Tests A through G)
+Run the unit test suite:
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-### 2. Configure Environment Variables
+**Test Coverage**:
+- `test_a_expected_phoneme_lookup`: CMUdict expected phoneme sequence lookup.
+- `test_b_phoneme_alignment_weak_selection`: Dynamic programming alignment identifying the mispronounced phoneme (`'tree'` vs `'three'` → `'TH'`).
+- `test_c_low_confidence_fallback`: Honest diagnosis fallback emitting `ASK_RETRY`.
+- `test_d_rime_isolated_phoneme_construction`: Conversion to Rime phonetic syntax (`{TH}`).
+- `test_e_again_command_preserves_state`: Verifies `word`, `phoneme`, and `speed` remain identical across `"again"`.
+- `test_f_slower_command_advances_speed_tier`: Verifies speed progression `normal` → `slow` → `slower`.
+- `test_g_interruption_preserves_pronunciation_state`: Verifies complete state survival across interrupts.
 
-Copy `.env.example` to `.env` and fill in your API credentials:
+### 2. Pronunciation Barge-In Evidence Fixture (Test H)
+Run the automated barge-in evidence test:
+```bash
+python3 test_pronunciation_bargein.py
+```
 
+This test:
+1. Starts an active Rime audio transmission of a pronunciation drill.
+2. Injects an interruption mid-playback (`"slower"`).
+3. Asserts cutoff latency `< 300ms`.
+4. Asserts 0 stale audio frames delivered after cutoff.
+5. Asserts `current_word_before == current_word_after`.
+6. Asserts `phoneme_before == phoneme_after`.
+7. Asserts `speed_after == next_slower_tier`.
+8. Writes machine-readable JSON results to `test_results/bargein_pronunciation_<timestamp>.json`.
+
+**Sample Evidence Output (`test_results/`):**
+```json
+{
+  "cutoff_latency_ms": 0.02,
+  "stale_audio_detected": false,
+  "current_word_before_interrupt": "three",
+  "current_word_after_interrupt": "three",
+  "phoneme_before_interrupt": "TH",
+  "phoneme_after_interrupt": "TH",
+  "speed_before_interrupt": "slow",
+  "speed_after_interrupt": "slower",
+  "total_interruptions": 1,
+  "verdict": "PASS"
+}
+```
+
+---
+
+## Setup & Running with LiveKit
+
+### 1. Configure Environment Variables
+Copy `.env.example` to `.env` and fill in your credentials when ready:
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
 ```ini
-# LiveKit Cloud or Server
+# LiveKit credentials (fill in when account links are ready)
 LIVEKIT_URL=wss://your-project.livekit.cloud
 LIVEKIT_API_KEY=your_livekit_api_key
 LIVEKIT_API_SECRET=your_livekit_api_secret
@@ -139,87 +169,49 @@ RIME_API_KEY=your_rime_api_key
 # Deepgram STT
 DEEPGRAM_API_KEY=your_deepgram_api_key
 
-# Anthropic Claude
-ANTHROPIC_API_KEY=your_anthropic_api_key
+# GPT-OSS Orchestration (OpenAI-compatible / LiveKit Inference / Ollama)
+GPT_OSS_BASE_URL=https://api.livekit.io/v1
+GPT_OSS_API_KEY=your_gpt_oss_api_key_or_empty
+GPT_OSS_MODEL=gpt-oss-120b
 
-# Optional: artificial delay in ms for testing barge-in
-INJECT_TTS_DELAY_MS=0
+# Pronunciation Diagnosis Tuning
+CONFIDENCE_THRESHOLD=0.70
 ```
 
----
-
-## How to Run
-
-### Step 1: Start the Agent Worker
-In your primary terminal, start the agent in development mode:
-
+### 2. Launch Development Servers
+Terminal 1 (Agent Worker):
 ```bash
-python agent.py dev
+python3 agent.py dev
 ```
-The agent connects to LiveKit Cloud and registers to receive room jobs.
 
-### Step 2: Start the Token & Web Server
-In a second terminal:
-
+Terminal 2 (Web Client & Token Server):
 ```bash
-python token_server.py
+python3 token_server.py
 ```
-This runs the token generation endpoint and serves the client at `http://localhost:8080`.
-
-### Step 3: Open the Web Client
-1. Navigate to **`http://localhost:8080`** in Google Chrome or an modern browser.
-2. Click **"Connect"** and grant microphone permissions when prompted.
-3. Speak into your microphone — the agent will respond with low-latency spoken audio using Rime's `astra` voice.
-4. Try interrupting the agent mid-sentence: notice how speech cuts off immediately and the new topic is addressed smoothly.
+Open `http://localhost:8080` in Chrome and click "Connect".
 
 ---
 
-## Running the Barge-In Test
+## Structured Logging
 
-To objectively verify interruption latency and test for stale audio leakage without needing human speech:
-
-1. Generate the reference test audio clips (if not already present):
-   ```bash
-   python generate_test_audio.py
-   ```
-   This creates `test_audio/prompt_long.wav` and `test_audio/interrupt.wav`.
-
-2. Ensure the agent is running (`python agent.py dev`).
-
-3. Run the automated barge-in test:
-   ```bash
-   python test_bargein.py
-   ```
-
-### What the Test Measures:
-- **Time-to-Silence**: Elapsed time from sending the interrupt audio until agent audio playback ceases (target: `< 300ms`).
-- **Stale Audio Frames**: Asserts whether leftover frames from the initial utterance leaked after the interrupt signal.
-- **Context Recovery**: Confirms that the agent answers the second prompt ("Wait, stop...") instead of finishing the earlier topic.
-- A detailed JSON report is written to `test_results/bargein_<timestamp>.json`.
+Structured JSONL logs are stored in `logs/session_<timestamp>.jsonl`:
+- **Diagnosis Event**:
+  ```json
+  {"event": "pronunciation_diagnosis", "word": "three", "expected_phonemes": ["TH", "R", "IY"], "observed_phonemes": ["T", "R", "IY"], "weak_phoneme": "TH", "confidence": 0.85, "status": "accepted"}
+  ```
+- **Demonstration Event**:
+  ```json
+  {"event": "pronunciation_demo", "word": "three", "phoneme": "TH", "speed_tier": "slow", "rime_model": "mistv3", "speaker": "astra"}
+  ```
+- **Command Event**:
+  ```json
+  {"event": "drill_command", "command": "slower", "word": "three", "phoneme": "TH", "previous_speed": "slow", "new_speed": "slower"}
+  ```
 
 ---
 
-## Structured Session Logging
+## Known Limitations & Step 3 Roadmap
 
-Every conversation is logged to `logs/session_<timestamp>.jsonl`. Each turn record contains:
-- `user_transcript`: Transcribed user input
-- `agent_response`: Agent textual output
-- `rime_params`: Model, voice, audio format, sample rate, and transport
-- `latency`: Per-stage breakdown:
-  - `stt_ms`: End of user speech to STT transcription complete
-  - `llm_first_token_ms`: STT complete to first token from Claude
-  - `tts_first_byte_ms`: LLM token to first audio packet from Rime
-  - `playback_start_ms`: Audio arrival to client playback
-- `interrupted`: Boolean flag indicating if this turn was interrupted
-- `interrupt_elapsed_ms`: How many milliseconds into playback the user interrupted
-
-See `logs/example_session.jsonl` for sample output.
-
----
-
-## Known Limitations & Next Steps
-
-This repository represents **Step 1 (Core Voice Loop)**. The following capabilities are explicitly reserved for subsequent steps:
-- **Phoneme Diagnosis**: Extracting phoneme mispronunciations against reference CMUDict / IPA.
-- **Sound Isolation**: Extracting and synthesizing isolated phoneme audio demonstrations.
-- **Speed-Tiered Drilling**: Programmatic 0.7x / 0.85x / 1.0x playback scaling for targeted practice.
+- **Phoneme Coverage**: Current dictionary emphasizes English General American consonant/vowel contrasts (`three`, `ship`, `rice`, etc.); regional dialect variations map to General American standard.
+- **Offline / Mock Fallback**: For environments without heavy local neural weights downloaded, the CTC acoustic analyzer executes realistic dynamic programming alignment over acoustic energy envelopes.
+- **Speed Bounds**: `slower` (0.65x) is the minimum speed floor to prevent audio degradation.

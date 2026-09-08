@@ -18,29 +18,59 @@ RIME_AUDIO_FORMAT = "pcm"
 RIME_SAMPLE_RATE = 16000
 RIME_SPEED_ALPHA = 1.0
 
+# Speed tiers for pronunciation drilling
+SPEED_TIERS = {
+    "normal": 1.0,
+    "slow": 0.80,
+    "slower": 0.65,
+}
+
 # ---------------------------------------------------------------------------
 # Deepgram STT
 # ---------------------------------------------------------------------------
 DEEPGRAM_MODEL = "nova-3"
 
 # ---------------------------------------------------------------------------
-# Anthropic LLM
+# GPT-OSS Orchestration LLM
 # ---------------------------------------------------------------------------
-LLM_MODEL = "claude-sonnet-4-20250514"
+GPT_OSS_MODEL = os.environ.get("GPT_OSS_MODEL", "gpt-oss-120b")
+GPT_OSS_BASE_URL = os.environ.get("GPT_OSS_BASE_URL", "https://api.livekit.io/v1")
+GPT_OSS_API_KEY = os.environ.get("GPT_OSS_API_KEY", "")
+
+# Step 1 fallback/compatibility
+LLM_MODEL = os.environ.get("LLM_MODEL", GPT_OSS_MODEL)
 
 SYSTEM_PROMPT = (
     "You are a friendly spoken pronunciation practice assistant. "
-    "Keep responses to 1-2 short sentences, conversational, since this is spoken aloud. "
-    "Do not use markdown, bullet points, or any formatting — just plain spoken English. "
-    "If the user asks you to tell a story or give a long answer, keep it concise but natural."
+    "You receive structured pronunciation analysis from a separate phoneme analysis system. "
+    "Do not invent phoneme diagnoses. "
+    "Use the supplied diagnosis and confidence to coach the user. "
+    "Keep spoken responses to 1-2 short sentences. "
+    "When the user says 'again', repeat the current pronunciation drill. "
+    "When the user says 'slower', move to the next slower speed tier. "
+    "Return only the requested structured action and concise spoken response."
 )
+
+# ---------------------------------------------------------------------------
+# Pronunciation & Vocabulary
+# ---------------------------------------------------------------------------
+TARGET_VOCABULARY = [
+    "three",
+    "think",
+    "this",
+    "ship",
+    "sheep",
+    "rice",
+    "light",
+    "right",
+]
+
+# Probabilistic threshold for accepting a weak phoneme diagnosis
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.70"))
 
 # ---------------------------------------------------------------------------
 # Test / Debug
 # ---------------------------------------------------------------------------
-# Artificial delay (ms) injected into the TTS call path for deterministic
-# barge-in testing.  Set via the INJECT_TTS_DELAY_MS env var; defaults to 0
-# in production.
 INJECT_TTS_DELAY_MS = int(os.environ.get("INJECT_TTS_DELAY_MS", "0"))
 
 # ---------------------------------------------------------------------------
@@ -49,6 +79,7 @@ INJECT_TTS_DELAY_MS = int(os.environ.get("INJECT_TTS_DELAY_MS", "0"))
 TOKEN_SERVER_PORT = int(os.environ.get("TOKEN_SERVER_PORT", "8080"))
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging & Results
 # ---------------------------------------------------------------------------
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_results")
