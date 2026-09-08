@@ -71,11 +71,26 @@ logger = logging.getLogger("say-that-sound")
 logger.setLevel(logging.INFO)
 
 
+from livekit.agents import llm
+
+
 class PronunciationAgent(Agent):
     """Pronunciation coaching agent powered by GPT-OSS orchestration."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_turn_callback=None) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
+        self.on_turn_callback = on_turn_callback
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        """Official LiveKit hook: called once user turn is fully endpointed and committed."""
+        user_text = new_message.text_content
+        if not user_text or not user_text.strip():
+            return
+        logger.info(f"[TURN COMMITTED] User utterance: {user_text.strip()}")
+        if self.on_turn_callback:
+            await self.on_turn_callback(user_text.strip())
 
 
 def extract_target_word(transcript: str, fallback_vocab: list) -> Optional[str]:
@@ -134,6 +149,12 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=stt,
         tts=tts,
         vad=vad,
+        turn_handling={
+            "interruption": {
+                "min_duration": 0.5,
+                "min_words": 1,
+            },
+        },
     )
 
     _current_user_text = ""
@@ -151,6 +172,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 "confidence": state.weak_phoneme_confidence,
                 "speed_tier": state.speed_tier,
                 "drill_state": state.drill_state.value,
+                "coach_text": _current_agent_text,
             })
             if ctx.room and ctx.room.local_participant:
                 await ctx.room.local_participant.publish_data(payload, reliable=True)
@@ -240,9 +262,6 @@ async def entrypoint(ctx: JobContext) -> None:
         _current_user_text = transcript.strip()
         sess_logger.mark_stt_done()
         logger.info(f"[USER] {_current_user_text}")
-
-        # Process pronunciation turn
-        asyncio.create_task(_process_turn(_current_user_text))
 
     async def _process_turn(user_text: str) -> None:
         nonlocal _current_agent_text, _current_speech_handle
@@ -450,9 +469,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
         tts.synthesize = _delayed_synth  # type: ignore[assignment]
 
+    agent_instance = PronunciationAgent(on_turn_callback=_process_turn)
     await session.start(
         room=ctx.room,
-        agent=PronunciationAgent(),
+        agent=agent_instance,
     )
     logger.info("Say That Sound Step 3 Agent ready and listening.")
 

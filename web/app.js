@@ -110,13 +110,22 @@ async function connect() {
         });
 
         // Transcription events — LiveKit sends these from the agent
+        let lastCoachText = '';
+
         room.on(RoomEvent.TranscriptionReceived, (segments, participant) => {
             if (!segments || segments.length === 0) return;
             for (const seg of segments) {
                 const isAgent = participant && !participant.isLocal;
-                const speaker = isAgent ? 'agent' : 'user';
                 if (seg.final) {
-                    appendTranscript(speaker, seg.text);
+                    if (isAgent) {
+                        const clean = (seg.text || '').trim();
+                        if (clean && clean !== lastCoachText) {
+                            lastCoachText = clean;
+                            appendTranscript('agent', clean);
+                        }
+                    } else {
+                        appendTranscript('user', seg.text);
+                    }
                     // Try to parse drill state from metadata
                     if (seg.metadata) {
                         try {
@@ -135,6 +144,13 @@ async function connect() {
                 const data = JSON.parse(text);
                 if (data.type === 'drill_state') {
                     updateDrillInfo(data);
+                    if (data.coach_text) {
+                        const clean = data.coach_text.trim();
+                        if (clean && clean !== lastCoachText) {
+                            lastCoachText = clean;
+                            appendTranscript('agent', clean);
+                        }
+                    }
                 }
             } catch (e) { /* not drill state data */ }
         });
